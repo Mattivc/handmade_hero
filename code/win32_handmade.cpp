@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <xinput.h>
+#include <dsound.h>
 
 #define internal static
 #define local_persist static
@@ -24,29 +25,127 @@ struct win32_window_dimension {
 
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE *pState)
 typedef X_INPUT_GET_STATE(x_input_get_state);
-X_INPUT_GET_STATE(XInputGetStateStub) { return 0; }
+X_INPUT_GET_STATE(XInputGetStateStub) { return ERROR_DEVICE_NOT_CONNECTED; }
 global x_input_get_state *XInputGetState_ = XInputGetStateStub;
 #define XInputGetState XInputGetState_
 
 #define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION *pVibration)
 typedef X_INPUT_SET_STATE(x_input_set_state);
-X_INPUT_SET_STATE(XInputSetStateStub) { return 0; }
+X_INPUT_SET_STATE(XInputSetStateStub) { return ERROR_DEVICE_NOT_CONNECTED; }
 global x_input_set_state *XInputSetState_ = XInputSetStateStub;
 #define XInputSetState XInputSetState_
 
+#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND *ppDS, LPUNKNOWN pUnkOuter)
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
+
+
 internal void Win32LoadXInput(void) {
-	HMODULE XInputLibrary = LoadLibrary("xinput1_3.dll");
+	// TODO(Matias): Test on WIndows 8
+
+	HMODULE XInputLibrary = LoadLibrary("xinput1_4.dll");
+
+	if (!XInputLibrary) {
+		// TODO(Matias): Diagnostic
+		HMODULE XInputLibrary = LoadLibrary("xinput1_3.dll");
+	}
 
 	if(XInputLibrary) {
 		XInputGetState = (x_input_get_state *)GetProcAddress(XInputLibrary, "XInputGetState");
+		if (!XInputGetState) { XInputGetState = XInputGetStateStub; }
+
 		XInputSetState = (x_input_set_state *)GetProcAddress(XInputLibrary, "XInputSetState");
+		if (!XInputSetState) { XInputSetState = XInputSetStateStub; }
+
+		// TODO(Matias): Diagnostic
+	} else {
+		// TODO(Matias): Diagnostic
 	}
 }
 
 global bool GlobalRunning;
 global win32_offscreen_buffer GlobalBackbuffer;
 
-internal win32_window_dimension Win32GetWindowDimension(HWND Window) {
+
+internal void Win32InitSound(HWND Window, int32_t SamplesPerSecond, int32_t BufferSize)
+{
+	// NOTE(Matias): Load the library
+	HMODULE DSoundLibrary = LoadLibrary("dsound.dll");
+
+	if (DSoundLibrary)
+	{
+		// NOTE(Matias): Get a DirectSound object
+		direct_sound_create *DirectSoundCreate = (direct_sound_create *) GetProcAddress(DSoundLibrary, "DirectSoundCreate");
+		// TODO(Matias): Double-check that this works on Win XP - DirectSound 7 or 8
+		LPDIRECTSOUND DirectSound;
+
+		if (DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DirectSound, 0)))
+		{
+
+			WAVEFORMATEX WaveFormat = {};
+			WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
+			WaveFormat.nChannels = 2;
+			WaveFormat.nSamplesPerSec = SamplesPerSecond;
+			WaveFormat.wBitsPerSample = 16;
+			WaveFormat.nBlockAlign = (WaveFormat.nChannels*WaveFormat.wBitsPerSample) / 8;
+			WaveFormat.nAvgBytesPerSec = WaveFormat.nSamplesPerSec*WaveFormat.nBlockAlign;
+			WaveFormat.cbSize = 0;
+
+			if (SUCCEEDED(DirectSound->SetCooperativeLevel(Window, DSSCL_PRIORITY)))
+			{
+				DSBUFFERDESC BufferDescription = {};
+				BufferDescription.dwSize = sizeof(BufferDescription);
+				BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
+				
+				// NOTE(Matias): Create a primary buffer
+				// TODO(Matias): Use global focus?
+				LPDIRECTSOUNDBUFFER PrimaryBuffer;
+				if(SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDescription, &PrimaryBuffer, 0)))
+				{
+					
+					if(SUCCEEDED(PrimaryBuffer->SetFormat(&WaveFormat)))
+					{
+						// NOTE(Matias): We have set the format of the primary buffer
+						OutputDebugStringA("Primary buffer was set\n");
+					}
+					else
+					{
+						// TODO(Matias): Diagnostic
+					}
+				}
+				else
+				{
+					// TODO(Matias): Diagnostic	
+				}
+			}
+			else
+			{
+				// TODO(Matias): Diagnostic
+			}
+			
+			DSBUFFERDESC BufferDescription = {};
+			BufferDescription.dwSize = sizeof(BufferDescription);
+			BufferDescription.dwFlags = 0;
+			BufferDescription.dwBufferBytes = BufferSize;
+			BufferDescription.lpwfxFormat = &WaveFormat;
+
+			// NOTE(Matias): Create a secondary buffer
+			LPDIRECTSOUNDBUFFER SecondaryBuffer;
+			if(SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDescription, &SecondaryBuffer, 0)))
+			{
+				OutputDebugStringA("Secondary buffer was set\n");
+			}
+			
+			// NOTE(Matias): Start playing
+		}
+		else
+		{
+			// TODO(Matias): Diagnostic
+		}
+	}
+}
+
+internal win32_window_dimension Win32GetWindowDimension(HWND Window)
+{
 	win32_window_dimension Dimension;
 
 	RECT ClientRect;
@@ -57,16 +156,17 @@ internal win32_window_dimension Win32GetWindowDimension(HWND Window) {
 	return Dimension;
 }
 
-internal void RenderWierdGradient(win32_offscreen_buffer *Buffer, int XOffset, int YOffset) {
+internal void RenderWierdGradient(win32_offscreen_buffer *Buffer, int XOffset, int YOffset)
+{
 
 	// TODO(Matias): See what the optimizer does
 	
 	uint8_t *Row = (uint8_t *)Buffer->Memory;
-	for (int Y = 0; Y < Buffer->Height; ++Y) {
-
+	for (int Y = 0; Y < Buffer->Height; ++Y)
+	{
 		uint32_t *Pixel = (uint32_t *)Row;
-
-		for (int X = 0; X < Buffer->Width; ++X) {
+		for (int X = 0; X < Buffer->Width; ++X)
+		{
 
 			uint8_t Blue = (X + XOffset);
 			uint8_t Green = (Y + YOffset);
@@ -77,12 +177,14 @@ internal void RenderWierdGradient(win32_offscreen_buffer *Buffer, int XOffset, i
 	}
 }
 
-internal void Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, int Heigth) {
+internal void Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, int Heigth)
+{
 
 	// TODO(Matias): Bulletproof this, free after, then free first if that fail
 	// TODO(Matias): Free our DIBSection
 
-	if(Buffer->Memory) {
+	if(Buffer->Memory)
+	{
 		VirtualFree(Buffer->Memory, 0, MEM_RELEASE);
 	}
 
@@ -98,14 +200,15 @@ internal void Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, i
 	
 	
 	int BitmapMemorySize = BYTES_PER_PIXEL*Width*Heigth;
-	Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+	Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
 
 	// TODO(Matias): Clear to black
 
 	Buffer->Pitch = Width*BYTES_PER_PIXEL;
 }
 
-internal void Win32DisplayBufferToWindow(win32_offscreen_buffer *Buffer, HDC DeviceContext, int WindowWidth, int WindowHeight) {
+internal void Win32DisplayBufferToWindow(win32_offscreen_buffer *Buffer, HDC DeviceContext, int WindowWidth, int WindowHeight)
+{
 
 	// TODO(Matias): Aspect ratio correction
 	// TODO(Matias): Play with strech modes
@@ -126,18 +229,22 @@ LRESULT CALLBACK Win32MainWindowCallback(
 
 	LRESULT Result = 0;
 
-	switch(Message) {
+	switch(Message)
+	{
 
-		case WM_CLOSE: {
+		case WM_CLOSE:
+		{
 			// TODO(Matias): Handle this with a message to the user
 			GlobalRunning = false;
 		} break;
 
-		case WM_ACTIVATEAPP: {
+		case WM_ACTIVATEAPP:
+		{
 			OutputDebugStringA("WM_ACTIVATEAPP\n");
 		} break;
 
-		case WM_DESTROY: {
+		case WM_DESTROY:
+		{
 			// TODO(Matias): Handle this as an error - recreate window
 			GlobalRunning = false;
 		} break;
@@ -145,10 +252,11 @@ LRESULT CALLBACK Win32MainWindowCallback(
 		case WM_SYSKEYDOWN:
 		case WM_SYSKEYUP:
 		case WM_KEYDOWN:
-		case WM_KEYUP: {
+		case WM_KEYUP:
+		{
 			uint32_t VKCode = wParam;
-			bool KeyDown = ((lParam & (1 << 30)) != 0);
-			bool KeyUp = ((lParam & (1 << 31)) == 0);
+			bool KeyDown = (lParam & (1 << 30)) != 0;
+			bool KeyUp = (lParam & (1 << 31)) == 0;
 
 			if (KeyDown != KeyUp) {
 				if (VKCode == 'W') {
@@ -178,9 +286,17 @@ LRESULT CALLBACK Win32MainWindowCallback(
 				}
 			}
 
+			// Handle Alt+F4
+			bool AltKeyDown = (lParam & (1 << 29)) != 0;
+			if (VKCode == VK_F4 && AltKeyDown)
+			{
+				GlobalRunning = false;
+			}
+
 		} break;
 
-		case WM_PAINT: {
+		case WM_PAINT:
+		{
 			PAINTSTRUCT Paint;
 			HDC DeviceContext = BeginPaint(Window, &Paint);
 
@@ -193,7 +309,8 @@ LRESULT CALLBACK Win32MainWindowCallback(
 			EndPaint(Window, &Paint);
 		} break;
 
-		default: {
+		default:
+		{
 			Result = DefWindowProc(Window, Message, wParam, lParam);
 		} break;
 	}
@@ -201,7 +318,8 @@ LRESULT CALLBACK Win32MainWindowCallback(
 	return Result;
 }
 
-internal int CALLBACK WinMain(
+internal int CALLBACK WinMain
+(
   HINSTANCE Instance,
   HINSTANCE PrevInstance,
   LPSTR     CmdLine,
@@ -218,7 +336,8 @@ internal int CALLBACK WinMain(
 	Win32ResizeDIBSection(&GlobalBackbuffer, 1280, 720);
 
 	WindowClass.lpszClassName = "HandmadeHeroWindowClass";
-	if(RegisterClass(&WindowClass)) {
+	if(RegisterClass(&WindowClass))
+	{
 
 		HWND Window = CreateWindowEx(
 			0,
@@ -234,18 +353,25 @@ internal int CALLBACK WinMain(
 			Instance,
 			0);
 
-		if(Window) {
+		if(Window)
+		{
 			HDC DeviceContext = GetDC(Window);
 
 			int XOffset = 0;
 			int YOffset = 0;
 
+
+			Win32InitSound(Window, 48000, 48000*sizeof(int16_t)*2);
+
 			GlobalRunning = true;
-			while(GlobalRunning) {
+			while(GlobalRunning)
+			{
 				MSG Message;
 
-				while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE)) {
-					if(Message.message == WM_QUIT) {
+				while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
+				{
+					if(Message.message == WM_QUIT)
+					{
 						GlobalRunning = false;
 					}
 
@@ -254,10 +380,12 @@ internal int CALLBACK WinMain(
 				}
 
 				// TODO(Matias): Should we poll this more fequently?
-				for (DWORD ControllerIndex = 0; ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++) {
+				for (DWORD ControllerIndex = 0; ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++)
+				{
 					XINPUT_STATE ControllerState;
 
-					if (XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS) {
+					if (XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS)
+					{
 						// TODO(Matias): Se if packet number increments to rapidly
 						XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
 
@@ -280,7 +408,9 @@ internal int CALLBACK WinMain(
 						int16_t StickX = Pad->sThumbLX;
 						int16_t StickY = Pad->sThumbLY;
 
-					} else {
+					}
+					else
+					{
 
 					}
 				}
@@ -293,11 +423,15 @@ internal int CALLBACK WinMain(
 				++XOffset;
 				++YOffset;
 			}
-		} else {
+		}
+		else
+		{
 			// TODO(Matias): Logging
 		}
 
-	} else {
+	}
+	else
+	{
 		// TODO(Matias): Logging
 	}
 
