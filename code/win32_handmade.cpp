@@ -1,10 +1,23 @@
-#include <windows.h>
-#include <stdint.h>
-#include <xinput.h>
-#include <dsound.h>
+/*
+	TODO(Matias): This is not a final platform layer!
 
-// TODO(Matias): Implement sine ourself
-#include <math.h>
+	- Save game locaiton
+	- Getting a handle to our own executable file
+	- Asset loading path
+	- Threading (launch a thread)
+	- Raw Input (support for multiple keybard)
+	- Sleep/timeBeginPeriod
+	- ClipCursor (for multi monitor support)
+	- Fullscreen support
+	- WM_SETCURSOR (control cursor visibility)
+	- QuaerCancelAutoplay
+	- WM_ACTIVATEAPP (for when we are not the active applicaiton)
+	- Blit speed improvements
+	- Hardware acceleration
+	- GetKeyboardLayouts
+
+	Just a partial list!
+*/
 
 #define internal static
 #define local_persist static
@@ -12,20 +25,34 @@
 
 #define PI_32 3.14159265359f
 
+#include <stdint.h>
+
+#include "handmade.cpp"
+
+#include <windows.h>
+#include <xinput.h>
+#include <dsound.h>
+
+// TODO(Matias): Implement sine ourself
+#include <math.h>
+
+
 #define BYTES_PER_PIXEL 4
 
-struct win32_offscreen_buffer {
-	BITMAPINFO Info;
-	// NOTE(Matias): Pixels are always 32-bits wide, Memory order: BB GG RR XX
-	void *Memory;
-	int Width;
-	int Height;
-	int Pitch;
-};
 
 struct win32_window_dimension {
 	int Width;
 	int Heigth;
+};
+
+struct win32_offscreen_buffer
+{
+	// NOTE(Matias): Pixels are always 32-bits wide, Memory order: BB GG RR XX
+	BITMAPINFO Info;
+	void *Memory;
+	int Width;
+	int Height;
+	int Pitch;
 };
 
 global bool GlobalRunning;
@@ -167,27 +194,6 @@ internal win32_window_dimension Win32GetWindowDimension(HWND Window)
 	return Dimension;
 }
 
-internal void RenderWierdGradient(win32_offscreen_buffer *Buffer, int XOffset, int YOffset)
-{
-
-	// TODO(Matias): See what the optimizer does
-	
-	uint8_t *Row = (uint8_t *)Buffer->Memory;
-	for (int Y = 0; Y < Buffer->Height; ++Y)
-	{
-		uint32_t *Pixel = (uint32_t *)Row;
-		for (int X = 0; X < Buffer->Width; ++X)
-		{
-
-			uint8_t Blue = (X + XOffset);
-			uint8_t Green = (Y + YOffset);
-
-			*Pixel++ = ((Green << 8) | Blue);
-					}
-		Row += Buffer->Pitch;
-	}
-}
-
 internal void Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, int Heigth)
 {
 
@@ -232,12 +238,8 @@ internal void Win32DisplayBufferToWindow(win32_offscreen_buffer *Buffer, HDC Dev
 }
 
 
-LRESULT CALLBACK Win32MainWindowCallback(
-  HWND   Window,
-  UINT   Message,
-  WPARAM wParam,
-  LPARAM lParam) {
-
+LRESULT CALLBACK Win32MainWindowCallback (HWND Window, UINT Message, WPARAM wParam, LPARAM lParam)
+{
 	LRESULT Result = 0;
 
 	switch(Message)
@@ -341,22 +343,21 @@ struct win32_sound_output {
 	int LatencySampleCount;
 };
 
-internal void Win32FillSoundBuffer(win32_sound_output *SoundOutput, DWORD ByteToLock, DWORD BytesToWrite)
+internal void Win32FillSoundBuffer (win32_sound_output *SoundOutput, DWORD ByteToLock, DWORD BytesToWrite)
 {
     // TODO(casey): More strenuous test!
-    // TODO(casey): Switch to a sine wave
     VOID *Region1;
     DWORD Region1Size;
     VOID *Region2;
     DWORD Region2Size;
-    if(SUCCEEDED(GlobalSecondaryBuffer->Lock(ByteToLock, BytesToWrite, &Region1, &Region1Size, &Region2, &Region2Size, 0)))
+    if (SUCCEEDED(GlobalSecondaryBuffer->Lock(ByteToLock, BytesToWrite, &Region1, &Region1Size, &Region2, &Region2Size, 0)))
     {
         // TODO(casey): assert that Region1Size/Region2Size is valid
 
         // TODO(casey): Collapse these two loops
         DWORD Region1SampleCount = Region1Size/SoundOutput->BytesPerSample;
         int16_t *SampleOut = (int16_t *)Region1;
-        for(DWORD SampleIndex = 0; SampleIndex < Region1SampleCount; ++SampleIndex)
+        for (DWORD SampleIndex = 0; SampleIndex < Region1SampleCount; ++SampleIndex)
         {
             // TODO(casey): Draw this out for people
             float SineValue = sinf(SoundOutput->tSine);
@@ -370,7 +371,7 @@ internal void Win32FillSoundBuffer(win32_sound_output *SoundOutput, DWORD ByteTo
 
         DWORD Region2SampleCount = Region2Size/SoundOutput->BytesPerSample;
         SampleOut = (int16_t *)Region2;
-        for(DWORD SampleIndex = 0; SampleIndex < Region2SampleCount; ++SampleIndex)
+        for (DWORD SampleIndex = 0; SampleIndex < Region2SampleCount; ++SampleIndex)
         {
             float SineValue = sinf(SoundOutput->tSine);
             int16_t SampleValue = (int16_t)(SineValue * SoundOutput->ToneVolume);
@@ -385,7 +386,7 @@ internal void Win32FillSoundBuffer(win32_sound_output *SoundOutput, DWORD ByteTo
     }
 }
 
-internal int CALLBACK WinMain ( HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdShow)
+internal int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdShow)
 {
   	LARGE_INTEGER PerfCounterFrequencyResult;
 	QueryPerformanceFrequency(&PerfCounterFrequencyResult);
@@ -405,21 +406,9 @@ internal int CALLBACK WinMain ( HINSTANCE Instance, HINSTANCE PrevInstance, LPST
 
 	
 
-	if(RegisterClass(&WindowClass))
+	if (RegisterClass(&WindowClass))
 	{
-		HWND Window = CreateWindowEx(
-			0,
-			WindowClass.lpszClassName,
-			"Handmade Hero",
-			WS_OVERLAPPEDWINDOW|WS_VISIBLE,
-			CW_USEDEFAULT,
-			CW_USEDEFAULT,
-			CW_USEDEFAULT,
-			CW_USEDEFAULT,
-			0,
-			0,
-			Instance,
-			0);
+		HWND Window = CreateWindowEx(0, WindowClass.lpszClassName, "Handmade Hero", WS_OVERLAPPEDWINDOW|WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,CW_USEDEFAULT, 0, 0, Instance, 0);
 
 		if(Window)
 		{
@@ -506,7 +495,12 @@ internal int CALLBACK WinMain ( HINSTANCE Instance, HINSTANCE PrevInstance, LPST
 					}
 				}
 
-				RenderWierdGradient(&GlobalBackbuffer, XOffset, YOffset);
+				game_offscreen_buffer Buffer = {};
+				Buffer.Memory = GlobalBackbuffer.Memory;
+				Buffer.Width = GlobalBackbuffer.Width;
+				Buffer.Height = GlobalBackbuffer.Height;
+				Buffer.Pitch = GlobalBackbuffer.Pitch;
+				GameUpdateAndRender(&Buffer, XOffset, YOffset);
 
 				// NOTE(Matias): DirectSound output test
 				DWORD PlayCursor;
@@ -544,11 +538,11 @@ internal int CALLBACK WinMain ( HINSTANCE Instance, HINSTANCE PrevInstance, LPST
 
 				int32_t FPS = PerfCounterFrequency / CounterElapsed;
 				int32_t MCPF = (int32_t)(CyclesElapsed / (1000 * 1000));
-
+#if 0
 				char Buffer[256];
 				wsprintf(Buffer, "Frame: %dms - %d FPS - %d MCycles\n", MSPerFrame, FPS, MCPF);
 				OutputDebugStringA(Buffer);
-
+#endif
 				LastCounter = EndCounter;
 				LastCycleCount = EndCycleCount;
 			}
