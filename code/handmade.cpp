@@ -14,7 +14,7 @@ internal void GameOutputSound(game_sound_output_buffer *SoundBuffer, int ToneHz)
 	    *SampleOut++ = SampleValue;
 	    *SampleOut++ = SampleValue;
 
-	    tSine += 2.0f*PI_32*1.0f/(float)WavePeriod;
+	    tSine += 2.0f*PI_32/(float)WavePeriod;
 	}
 }
 
@@ -38,9 +38,31 @@ internal void RenderWierdGradient(game_offscreen_buffer *Buffer, int XOffset, in
 	}
 }
 
-internal void GameUpdateAndRender(game_offscreen_buffer *Buffer, int BlueOffset, int GreenOffset,
-	                              game_sound_output_buffer *SoundBuffer, int ToneHz)
+internal void GameUpdateAndRender(game_input *Input,
+	                              game_offscreen_buffer *Buffer,
+	                              game_sound_output_buffer *SoundBuffer)
 {
+	local_persist int BlueOffset = 0;
+	local_persist int GreenOffset = 0;
+	local_persist int ToneHz = 256;
+
+	game_controller_input *Input0 = &Input->Controllers[0];
+
+	if (Input0->IsAnalog)
+	{
+		ToneHz = 256 + (int)(128.0f*(Input0->EndY));
+		BlueOffset += (int)4.0f*(Input0->EndX);
+	}
+	else
+	{
+
+	}
+
+	if (Input0->Down.EndedDown) {
+		GreenOffset += 1;
+	}
+
+
 	// TODO(Matias): Allow sample offsets here for more robust platform options
 	GameOutputSound(SoundBuffer, ToneHz);
 	RenderWierdGradient(Buffer, BlueOffset, GreenOffset);
