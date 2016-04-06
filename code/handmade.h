@@ -10,10 +10,11 @@
 		1 - Slow code allowed
 */
 
+
 #if HANDMADE_SLOW
-	#define Assert(Expression) if(!(Expression)) {*(int *)0 = 0;}
+#define Assert(Expression) if(!(Expression)) {*(int *)0 = 0;}
 #else
-	#define Assert(Expression)
+#define Assert(Expression)
 #endif
 
 #define Kilobytes(Value) ((Value)*1024LL)
@@ -23,10 +24,26 @@
 
 #define ArrayCount(Array) sizeof(Array) / sizeof((Array)[0])
 
+inline uint32_t SafeTruncateUInt64(uint64_t Value)
+{
+	Assert(Value <= 0xFFFFFFFF);
+	return (uint32_t)Value;
+}
+
 /*
-	TODO(Matias): Services that the platform layaer profivides tot he game.
+	TODO(Matias): Services that the platform layaer profivides to the game.
 */
 
+#if HANDMADE_INTERNAL
+struct debug_read_file_result
+{
+	uint32_t ContentSize;
+	void *Contents;
+};
+debug_read_file_result DEBUGPlatformReadEntireFile(char *Filename);
+void DEBUGPlatformFreeFileMemory(void *Memory);
+bool DEBUGPlatformWriteEntireFile(char *Filename, uint32_t MemorySize, void *Memory);
+#endif
 
 /*
 	NOTE(Matias): Services that the game provides tot he platform layer.
