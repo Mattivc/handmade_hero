@@ -331,45 +331,7 @@ LRESULT CALLBACK Win32MainWindowCallback (HWND Window, UINT Message, WPARAM wPar
 		case WM_KEYDOWN:
 		case WM_KEYUP:
 		{
-			uint32_t VKCode = wParam;
-			bool KeyDown = (lParam & (1 << 30)) != 0;
-			bool KeyUp = (lParam & (1 << 31)) == 0;
-
-			if (KeyDown != KeyUp) {
-				if (VKCode == 'W') {
-					
-				} else if (VKCode == 'A') {
-					
-				} else if (VKCode == 'S') {
-					
-				} else if (VKCode == 'D') {
-					
-				} else if (VKCode == 'Q') {
-					
-				} else if (VKCode == 'E') {
-					
-				} else if (VKCode == VK_UP) {
-					
-				} else if (VKCode == VK_LEFT) {
-					
-				} else if (VKCode == VK_DOWN) {
-					
-				} else if (VKCode == VK_RIGHT) {
-					
-				} else if (VKCode == VK_ESCAPE) {
-
-				} else if (VKCode == VK_SPACE) {
-					
-				}
-			}
-
-			// Handle Alt+F4
-			bool AltKeyDown = (lParam & (1 << 29)) != 0;
-			if (VKCode == VK_F4 && AltKeyDown)
-			{
-				GlobalRunning = false;
-			}
-
+			Assert(!"Keyboard input came in trough a non-dispatched message.");
 		} break;
 
 		case WM_PAINT:
@@ -456,13 +418,83 @@ internal void Win32FillSoundBuffer (win32_sound_output *SoundOutput, DWORD ByteT
     }
 }
 
+internal void Win32ProcessKeyboardMessage(game_button_state *NewState, bool IsDown)
+{
+	NewState->EndedDown = IsDown;
+	NewState->HalfTransitionCount++;
+}
+
 internal void Win32ProcessXInputDigitalButton(DWORD XInputButtonState, game_button_state *OldState, DWORD ButtonBit, game_button_state *NewState)
 {
 	NewState->EndedDown = (XInputButtonState & ButtonBit) == ButtonBit;
 	NewState->HalfTransitionCount = (OldState->EndedDown != NewState->EndedDown) ? 1 : 0;
 }
 
-internal int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdShow)
+internal void Win32ProcessPendingMessages(game_controller_input *KeyboardController)
+{
+	MSG Message;
+
+	while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
+	{
+		switch(Message.message)
+		{
+			case WM_QUIT:
+			{
+				GlobalRunning = false;
+			} break;
+			case WM_SYSKEYDOWN:
+			case WM_SYSKEYUP:
+			case WM_KEYDOWN:
+			case WM_KEYUP:
+			{
+				uint32_t VKCode = (uint32_t)Message.wParam;
+				bool WasDown = (Message.lParam & (1 << 30)) != 0;
+				bool IsDown = (Message.lParam & (1 << 31)) == 0;
+				if (WasDown != IsDown) {
+					if (VKCode == 'W') {
+						
+					} else if (VKCode == 'A') {
+						
+					} else if (VKCode == 'S') {
+						
+					} else if (VKCode == 'D') {
+						
+					} else if (VKCode == 'Q') {
+						Win32ProcessKeyboardMessage(&KeyboardController->LeftShoulder, IsDown);
+					} else if (VKCode == 'E') {
+						Win32ProcessKeyboardMessage(&KeyboardController->RightShoulder, IsDown);
+					} else if (VKCode == VK_UP) {
+						Win32ProcessKeyboardMessage(&KeyboardController->Up, IsDown);
+					} else if (VKCode == VK_LEFT) {
+						Win32ProcessKeyboardMessage(&KeyboardController->Left, IsDown);
+					} else if (VKCode == VK_DOWN) {
+						Win32ProcessKeyboardMessage(&KeyboardController->Down, IsDown);
+					} else if (VKCode == VK_RIGHT) {
+						Win32ProcessKeyboardMessage(&KeyboardController->Right, IsDown);
+					} else if (VKCode == VK_ESCAPE) {
+						GlobalRunning = false;
+					} else if (VKCode == VK_SPACE) {
+						
+					}
+				}
+
+				// Handle Alt+F4
+				bool AltKeyDown = (Message.lParam & (1 << 29)) != 0;
+				if (VKCode == VK_F4 && AltKeyDown)
+				{
+					GlobalRunning = false;
+				}
+			} break;
+			default:
+			{
+				TranslateMessage(&Message);
+				DispatchMessage(&Message);
+			}
+		}
+	}
+}
+
+extern int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdShow)
 {
   	LARGE_INTEGER PerfCounterFrequencyResult;
 	QueryPerformanceFrequency(&PerfCounterFrequencyResult);
@@ -519,10 +551,10 @@ internal int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR
 
 			game_memory GameMemory = {};
 			GameMemory.PermanentStorageSize = Megabytes(64);
-			GameMemory.TransientStorageSize = Gigabytes((uint64_t)4);
+			GameMemory.TransientStorageSize = Gigabytes(1);
 
 			uint64_t TotalSize = GameMemory.PermanentStorageSize + GameMemory.TransientStorageSize;
-			GameMemory.PermanentStorage = VirtualAlloc(BaseAddress, TotalSize, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+			GameMemory.PermanentStorage = VirtualAlloc(BaseAddress, (size_t)TotalSize, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
 
 			GameMemory.TransientStorage = ((uint8_t *)GameMemory.PermanentStorage + GameMemory.PermanentStorageSize);
 
@@ -541,22 +573,14 @@ internal int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR
 
 				while(GlobalRunning)
 				{
-					MSG Message;
+					game_controller_input *KeyboardController = &NewInput->Controllers[0];
+					game_controller_input ZeroController = {};
+					*KeyboardController = ZeroController;
 
-
-					while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
-					{
-						if(Message.message == WM_QUIT)
-						{
-							GlobalRunning = false;
-						}
-
-						TranslateMessage(&Message);
-						DispatchMessage(&Message);
-					}
+					Win32ProcessPendingMessages(KeyboardController);
 
 					// TODO(Matias): Should we poll this more fequently?
-					int MaxControllerCount = XUSER_MAX_COUNT;
+					DWORD MaxControllerCount = XUSER_MAX_COUNT;
 					if (MaxControllerCount > ArrayCount(NewInput->Controllers)) {
 						MaxControllerCount = ArrayCount(NewInput->Controllers);
 					}
@@ -573,10 +597,10 @@ internal int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR
 							// TODO(Matias): Se if packet number increments to rapidly
 							XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
 
-							bool Up = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
-							bool Down = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
-							bool Left = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
-							bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+							bool Up = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
+							bool Down = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+							bool Left = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+							bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
 
 							NewController->IsAnalog = true;
 							NewController->StartX = OldController->EndX;
@@ -662,7 +686,7 @@ internal int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR
 					int64_t CounterElapsed = EndCounter.QuadPart - LastCounter.QuadPart;
 					int32_t MSPerFrame = (int32_t)((1000*CounterElapsed) / PerfCounterFrequency);
 
-					int32_t FPS = PerfCounterFrequency / CounterElapsed;
+					int32_t FPS = (int32_t)(PerfCounterFrequency / CounterElapsed);
 					int32_t MCPF = (int32_t)(CyclesElapsed / (1000 * 1000));
 	#if 0
 					char Buffer[256];
