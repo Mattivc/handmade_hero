@@ -27,6 +27,7 @@
 #define PI_32 3.14159265359f
 
 #include <stdint.h>
+#include <stdio.h>
 #include <math.h>
 
 #include "handmade.cpp"
@@ -44,6 +45,7 @@
 global bool GlobalRunning;
 global win32_offscreen_buffer GlobalBackbuffer;
 global LPDIRECTSOUNDBUFFER GlobalSecondaryBuffer;
+global int64_t GlobalPerfCounterFrequency;
 
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE *pState)
 typedef X_INPUT_GET_STATE(x_input_get_state);
@@ -420,10 +422,7 @@ internal void Win32FillSoundBuffer (win32_sound_output *SoundOutput, DWORD ByteT
 
 internal void Win32ProcessKeyboardMessage(game_button_state *NewState, bool IsDown)
 {
-	//Assert(NewState->EndedDown != IsDown);
-	OutputDebugStringA(NewState->EndedDown ? "EndedDown:True\n" : "EndedDown:False\n");
-	OutputDebugStringA(IsDown ? "IsDown:True\n" : "IsDown:False\n");
-	OutputDebugStringA("--------\n");
+	Assert(NewState->EndedDown != IsDown);
 	NewState->EndedDown = IsDown;
 	NewState->HalfTransitionCount++;
 }
@@ -534,11 +533,27 @@ internal void Win32ProcessPendingMessages(game_controller_input *KeyboardControl
 	}
 }
 
+inline LARGE_INTEGER Win32GetWallClock()
+{
+	LARGE_INTEGER Result;
+	QueryPerformanceCounter(&Result);
+	return Result;
+}
+
+inline float Win32GetSecondsElapsed(LARGE_INTEGER Start, LARGE_INTEGER End)
+{
+	return (float)(End.QuadPart - Start.QuadPart) / (float)GlobalPerfCounterFrequency;
+}
+
 extern int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdShow)
 {
   	LARGE_INTEGER PerfCounterFrequencyResult;
 	QueryPerformanceFrequency(&PerfCounterFrequencyResult);
-	int64_t PerfCounterFrequency = PerfCounterFrequencyResult.QuadPart;
+	GlobalPerfCounterFrequency = PerfCounterFrequencyResult.QuadPart;
+
+	// NOTE(Matias): Set the Windows scheduler granularity to 1 MS, so that our sleep can be more granular
+	UINT DesiredSchedulerMS = 1;
+	bool SleepIsGranular = timeBeginPeriod(DesiredSchedulerMS) == TIMERR_NOERROR;
 
 	Win32LoadXInput();
 
@@ -552,7 +567,10 @@ extern int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR C
 
 	WindowClass.lpszClassName = "HandmadeHeroWindowClass";
 
-	
+	// TODO(Matias): How do we realiably query this on windows?
+	int MonitorRefreshHz = 60;
+	int GameUpdateHz = MonitorRefreshHz / 2;
+	float TargetSecondsPerFrame = 1.0f / (float)GameUpdateHz;
 
 	if (RegisterClass(&WindowClass))
 	{
@@ -599,9 +617,7 @@ extern int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR C
 			if (Samples && GameMemory.PermanentStorage && GameMemory.TransientStorage)
 			{
 
-				LARGE_INTEGER LastCounter;
-				QueryPerformanceCounter(&LastCounter);
-
+				LARGE_INTEGER LastCounter = Win32GetWallClock();
 				uint64_t LastCycleCount = __rdtsc();
 
 				game_input Input[2] = {};
@@ -668,10 +684,10 @@ extern int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR C
 							}
 
 							float Threshold = 0.5;
-							Win32ProcessXInputDigitalButton((NewController->StickAverageX < -Threshold) ? 1 : 0, &OldController->MoveLeft, 1, &NewController->MoveLeft);
-							Win32ProcessXInputDigitalButton((NewController->StickAverageX > Threshold) ? 1 : 0, &OldController->MoveRight, 1, &NewController->MoveRight);
-							Win32ProcessXInputDigitalButton((NewController->StickAverageY < -Threshold) ? 1 : 0, &OldController->MoveDown, 1, &NewController->MoveDown);
-							Win32ProcessXInputDigitalButton((NewController->StickAverageY > Threshold) ? 1 : 0, &OldController->MoveUp, 1, &NewController->MoveUp);
+							Win32ProcessXInputDigitalButton(((NewController->StickAverageX < -Threshold) ? 1 : 0), &OldController->MoveLeft, 1, &NewController->MoveLeft);
+							Win32ProcessXInputDigitalButton(((NewController->StickAverageX > Threshold) ? 1 : 0), &OldController->MoveRight, 1, &NewController->MoveRight);
+							Win32ProcessXInputDigitalButton(((NewController->StickAverageY < -Threshold) ? 1 : 0), &OldController->MoveDown, 1, &NewController->MoveDown);
+							Win32ProcessXInputDigitalButton(((NewController->StickAverageY > Threshold) ? 1 : 0), &OldController->MoveUp, 1, &NewController->MoveUp);
 
 
 							Win32ProcessXInputDigitalButton(Pad->wButtons, &OldController->ActionDown, XINPUT_GAMEPAD_A, &NewController->ActionDown);
@@ -736,31 +752,54 @@ extern int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR C
 						Win32FillSoundBuffer(&SoundOutput, BytesToLock, BytesToWrite, &SoundBuffer);
 					}
 
+					LARGE_INTEGER WorkCounter = Win32GetWallClock();
+					float WorkSecondsElapsed = Win32GetSecondsElapsed(LastCounter, WorkCounter);
+
+
+					float SecondsElapsedForFrame = WorkSecondsElapsed;
+					if (SecondsElapsedForFrame < TargetSecondsPerFrame)
+					{
+						if (SleepIsGranular)
+						{
+							DWORD SleepMS = (DWORD)(1000.0f*(TargetSecondsPerFrame - SecondsElapsedForFrame));
+							if (SleepMS > 0)
+							{
+								Sleep(SleepMS);
+							}
+						}
+						while (SecondsElapsedForFrame < TargetSecondsPerFrame)
+						{
+							SecondsElapsedForFrame = Win32GetSecondsElapsed(LastCounter, Win32GetWallClock());
+						}
+						
+					}
+					else
+					{
+						// TODO(Matias): Missed frame rate
+						// TODO(Matias): Logging
+					}
+
 					win32_window_dimension Dimension = Win32GetWindowDimension(Window);
 					Win32DisplayBufferToWindow(&GlobalBackbuffer, DeviceContext, Dimension.Width, Dimension.Heigth);
-
-					uint64_t EndCycleCount = __rdtsc();
-
-					LARGE_INTEGER EndCounter;
-					QueryPerformanceCounter(&EndCounter);
-
-					uint64_t CyclesElapsed = EndCycleCount - LastCycleCount;
-					int64_t CounterElapsed = EndCounter.QuadPart - LastCounter.QuadPart;
-					int32_t MSPerFrame = (int32_t)((1000*CounterElapsed) / PerfCounterFrequency);
-
-					int32_t FPS = (int32_t)(PerfCounterFrequency / CounterElapsed);
-					int32_t MCPF = (int32_t)(CyclesElapsed / (1000 * 1000));
-	#if 0
-					char Buffer[256];
-					wsprintf(Buffer, "Frame: %dms - %d FPS - %d MCycles\n", MSPerFrame, FPS, MCPF);
-					OutputDebugStringA(Buffer);
-	#endif
-					LastCounter = EndCounter;
-					LastCycleCount = EndCycleCount;
 
 					game_input *Temp = NewInput;
 					NewInput = OldInput;
 					OldInput = Temp;
+					
+					LARGE_INTEGER EndCounter = Win32GetWallClock();
+					float MSPerFrame = 1000.0f*Win32GetSecondsElapsed(LastCounter, EndCounter);                    
+					LastCounter = EndCounter;
+
+					uint64_t EndCycleCount = __rdtsc();
+					uint64_t CyclesElapsed = EndCycleCount - LastCycleCount;
+					LastCycleCount = EndCycleCount;
+					
+					double FPS = 0.0f;
+					double MCPF = ((double)CyclesElapsed / (1000.0f * 1000.0f));
+
+					char FPSBuffer[256];
+					snprintf(FPSBuffer, sizeof(FPSBuffer), "%.02fms/f,  %.02ff/s,  %.02fmc/f\n", MSPerFrame, FPS, MCPF);
+					OutputDebugStringA(FPSBuffer);
 				}
 			}
 			else
@@ -772,7 +811,6 @@ extern int CALLBACK WinMain (HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR C
 		{
 			// TODO(Matias): Logging
 		}
-
 	}
 	else
 	{
